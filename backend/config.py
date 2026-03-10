@@ -15,9 +15,9 @@ class Config:
     USER_AGENT = os.environ.get('USER_AGENT') or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
     # Real-time search behavior
-    ENABLE_SELENIUM = os.environ.get('ENABLE_SELENIUM', '0') == '1'  # default off for speed/stability
-    REALTIME_PLATFORM_TIMEOUT_SEC = int(os.environ.get('REALTIME_PLATFORM_TIMEOUT_SEC', 6))
-    REALTIME_OVERALL_TIMEOUT_SEC = int(os.environ.get('REALTIME_OVERALL_TIMEOUT_SEC', 10))
+    ENABLE_SELENIUM = os.environ.get('ENABLE_SELENIUM', '1') == '1'  # enabled by default now
+    REALTIME_PLATFORM_TIMEOUT_SEC = int(os.environ.get('REALTIME_PLATFORM_TIMEOUT_SEC', 60))
+    REALTIME_OVERALL_TIMEOUT_SEC = int(os.environ.get('REALTIME_OVERALL_TIMEOUT_SEC', 90))
     
     # Recommendation configuration
     TFIDF_MAX_FEATURES = int(os.environ.get('TFIDF_MAX_FEATURES', 5000))

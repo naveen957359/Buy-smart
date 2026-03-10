@@ -253,96 +253,66 @@ class FlipkartScraper(SeleniumScraper):
                 
             soup = BeautifulSoup(source, 'lxml')
             
-            # BROAD Detectors: Flipkart layouts change constantly
-            potential_items = []
+            # New generic strategy: Find all links with /p/ which indicates a product
+            links = soup.find_all('a', href=re.compile(r'/p/'))
             
-            # Cards by data-id
-            potential_items.extend(soup.find_all('div', {'data-id': True}))
-            # Modern grids
-            potential_items.extend(soup.find_all('div', class_='_1xHGtK'))
-            potential_items.extend(soup.find_all('div', class_='_4ddWXP'))
-            # Lists
-            potential_items.extend(soup.find_all('div', class_='_1AtVbE'))
-            potential_items.extend(soup.find_all('div', class_='cPHDOP'))
-            potential_items.extend(soup.find_all('div', class_='_2kHMtA'))
-            # Clothes/Specific
-            potential_items.extend(soup.find_all('div', class_='slAVV4'))
-
+            seen_pids = set()
             valid_items = []
-            seen_texts = set()
             
-            for item in potential_items:
-                # Must have a price or name to be considered a product
-                has_price = (item.find('div', class_='_30jeq3') or 
-                            item.find('div', class_='Nx9bqj') or 
-                            item.find('div', class_='_16969e') or
-                            '₹' in item.get_text())
+            for link in links:
+                href = link.get('href', '')
+                pid_match = re.search(r'pid=([^&]+)', href)
+                pid = pid_match.group(1) if pid_match else href
                 
-                if has_price:
-                    # Use first 80 chars as fingerprint
-                    fingerprint = item.get_text(strip=True)[:80]
-                    if fingerprint and fingerprint not in seen_texts:
-                        valid_items.append(item)
-                        seen_texts.add(fingerprint)
-            
+                if pid not in seen_pids:
+                    seen_pids.add(pid)
+                    # Flipkart's actual component logic often puts the link deeper, but sometimes it is the wrapper.
+                    # Usually, the wrapper is around 2 levels up if it's purely a card link wrapper.
+                    # Or we can just extract from the link's direct parent if the link wraps everything.
+                    # To be safe, we look at link.parent.parent as the card boundary.
+                    card = link.parent.parent if link.parent and link.parent.parent else link
+                    valid_items.append((href, card))
+                    
             logger.info(f"Detected {len(valid_items)} potential items on Flipkart")
 
-            for item in valid_items[:max_results]:
+            for relative_url, card in valid_items[:max_results]:
                 try:
-                    # NAME: Very aggressive selection
-                    name_tag = (item.find('div', class_='_4rR01T') or 
-                               item.find('a', class_='s1Q9rs') or 
-                               item.find('a', class_='IRpwTa') or 
-                               item.find('div', class_='KzDlHZ') or 
-                               item.find('a', class_='wjcEIp') or
-                               item.find('div', class_='_3e7Y9f') or
-                               item.find('a', title=True) or
-                               item.find('img', alt=True))
-                    
-                    if name_tag:
-                        name = name_tag.get('title') or name_tag.get('alt') or name_tag.get_text(strip=True)
-                    else:
+                    texts = [t for t in card.stripped_strings]
+                    if not texts:
                         continue
                         
-                    if not name or len(name) < 3: continue
+                    # Title is usually the first long string
+                    name = next((t for t in texts if len(t) > 10 and t != 'Sponsored'), None)
+                    if not name:
+                        continue
+                        
+                    # Prices
+                    price_texts = [t for t in texts if '₹' in t]
+                    prices_parsed = [self.extract_price(pt) for pt in price_texts if self.extract_price(pt)]
                     
-                    # URL: Look for any link that isn't a category or filter
-                    link_tag = (item.find('a', href=re.compile(r'/p/')) or 
-                               item.find('a', class_='_1fQZEK') or 
-                               item.find('a', class_='VJA3rP') or
-                               item.find('a', class_='_2rpwqI') or
-                               item.find('a', {'target': '_blank'}))
-                               
-                    relative_url = link_tag.get('href') if link_tag else None
-                    if not relative_url: continue
+                    if not prices_parsed:
+                        continue
+                        
+                    # Usually the main prices are the first 1 or 2 found in the DOM (Original, Current, or just Current)
+                    main_prices = prices_parsed[:2]
+                    main_prices.sort() # min is current, max is original
+                    price = main_prices[0]
+                    original_price = main_prices[-1] if len(main_prices) > 1 else price * 1.2
                     
                     product_url = relative_url if relative_url.startswith('http') else "https://www.flipkart.com" + relative_url
-            
-                    # PRICE: Multi-layer extraction
-                    price_tag = (item.find('div', class_='_30jeq3') or 
-                                item.find('div', class_='Nx9bqj') or 
-                                item.find('div', class_='_16969e'))
                     
-                    price_text = price_tag.get_text() if price_tag else ""
-                    if not price_text:
-                        # Fallback: look for ₹ in the whole item
-                        price_match = re.search(r'₹([\d,]+)', item.get_text())
-                        price_text = price_match.group(0) if price_match else ""
-                        
-                    price = self.extract_price(price_text)
-                    if not price: continue
-            
-                    # Original Price
-                    orig_tag = item.find('div', class_='_3I9_wc') or item.find('div', class_='yRaY8j')
-                    original_price = self.extract_price(orig_tag.get_text()) if orig_tag else price * 1.2
-            
                     # IMAGE
-                    img_tag = item.find('img')
+                    img_tag = card.find('img')
                     image_url = img_tag.get('src') if img_tag else None
 
-                    # RATING
-                    rating_tag = item.find('div', class_='_3LWZlK') or item.find('div', class_='XQDdHH')
-                    rating = self.extract_rating(rating_tag.get_text()) if rating_tag else 4.0
+                    # RATING count
+                    rating = 4.0
+                    review_count = random.randint(50, 5000)
+                    rating_counts = [t for t in texts if t.startswith('(') and t.endswith(')')]
+                    if rating_counts:
+                        clean_count = re.sub(r'[^\d]', '', rating_counts[0])
+                        if clean_count.isdigit():
+                            review_count = int(clean_count)
             
                     products.append({
                         'name': name,
@@ -350,7 +320,7 @@ class FlipkartScraper(SeleniumScraper):
                         'price': price,
                         'original_price': original_price,
                         'rating': rating,
-                        'review_count': random.randint(50, 5000),
+                        'review_count': review_count,
                         'platform': self.platform,
                         'product_url': product_url,
                         'image_url': image_url,

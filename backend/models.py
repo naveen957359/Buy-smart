@@ -180,7 +180,7 @@ class WishlistItem(db.Model):
         return {
             'id': self.id,
             'user_id': self.user_id,
-            'product_id': self.product_id,
+            'product_id': self.product_id, 
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'product': self.product.to_dict() if self.product else None
         }
